@@ -1,0 +1,18 @@
+# Core dependencies
+torch>=2.0.0
+transformers>=4.29.0
+sentencepiece>=0.1.99
+sacremoses>=0.0.53
+
+# Dataset and utilities
+datasets>=2.14.0
+accelerate>=0.20.0
+
+# ONNX quantization (optional, for model optimization)
+optimum[onnxruntime]>=2.0.0
+onnx>=1.14.0
+onnxruntime>=1.18.0
+
+# Additional utilities
+numpy>=1.24.0
+tqdm>=4.65.0
