@@ -7,7 +7,8 @@ import os
 import re
 import json
 import random
-from dataclasses import dataclass
+import argparse
+from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional
 import torch
 from torch.utils.data import Dataset
@@ -50,6 +51,36 @@ class TrainingConfig:
     # 优先级配置（是否启用分类训练）
     use_priority_training: bool = True
     priority_ratio: float = 0.7  # 优先类别占比
+
+    # 测试配置
+    fixed_sentences: List[str] = field(default_factory=list)
+    templates: List[str] = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, json_path: str) -> "TrainingConfig":
+        """从 JSON 文件加载配置"""
+        if not os.path.exists(json_path):
+            return cls()
+            
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                config_dict = json.load(f)
+            
+            # 过滤未知的配置项
+            valid_keys = cls.__dataclass_fields__.keys()
+            filtered_dict = {k: v for k, v in config_dict.items() if k in valid_keys}
+            
+            print(f"Loaded config from {json_path}")
+            return cls(**filtered_dict)
+        except Exception as e:
+            print(f"Error loading config from {json_path}: {e}")
+            return cls()
+
+    def save_to_json(self, json_path: str):
+        """保存配置到 JSON 文件"""
+        config_dict = {k: v for k, v in self.__dict__.items()}
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(config_dict, f, indent=2, ensure_ascii=False)
 
 # ==================== 数据清洗和分类 ====================
 class DataCleaner:
@@ -538,14 +569,20 @@ class OpusMTTrainer:
 # ==================== 主函数 ====================
 def main():
     """主函数"""
-    # 创建配置
-    config = TrainingConfig()
+    parser = argparse.ArgumentParser(description="Opus-MT Training Script")
+    parser.add_argument("--config", type=str, default="config/zh-en.json", help="Path to configuration file")
+    args = parser.parse_args()
     
-    # 保存配置
+    # 创建配置
+    if os.path.exists(args.config):
+        config = TrainingConfig.from_json(args.config)
+    else:
+        print(f"Config file not found: {args.config}, using defaults.")
+        config = TrainingConfig()
+    
+    # 保存配置 (保存一份副本到输出目录)
     os.makedirs(config.output_dir, exist_ok=True)
-    config_dict = {k: v for k, v in config.__dict__.items()}
-    with open(os.path.join(config.output_dir, "training_config.json"), "w", encoding="utf-8") as f:
-        json.dump(config_dict, f, indent=2, ensure_ascii=False)
+    config.save_to_json(os.path.join(config.output_dir, "training_config.json"))
     
     # 创建训练器
     trainer = OpusMTTrainer(config)
@@ -554,13 +591,20 @@ def main():
     trainer.train()
     
     # 测试翻译
-    test_texts = [
-        "星际公民",
-        "量子跃迁",
-        "太空站",
-        "飞船",
-    ]
+    # 使用配置中的测试句子和模板
+    test_texts = []
+    if config.fixed_sentences:
+        test_texts.extend(config.fixed_sentences)
     
+    if config.templates:
+        # 仅取前几个模板作为示例
+        test_texts.extend(config.templates[:5])
+    
+    # 如果配置中没有，则跳过测试
+    if not test_texts:
+        print("\nSkipping translation test (no test sentences configured).")
+        return
+
     trainer.test_translation(
         test_texts,
         model_path=os.path.join(config.output_dir, "final_model")

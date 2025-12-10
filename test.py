@@ -7,9 +7,12 @@
 
 import os
 import re
+import json
 import random
 import time
 import sys
+import argparse
+from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Tuple, Optional
 from transformers import MarianMTModel, MarianTokenizer
 import torch
@@ -22,23 +25,47 @@ except ImportError:
     print("警告: optimum 未安装，无法加载 ONNX 量化模型")
 
 # ==================== 配置 ====================
+@dataclass
 class TestConfig:
     """测试配置"""
-    base_model_name = "Helsinki-NLP/opus-mt-zh-en"  # 原始基础模型
-    finetuned_model_path = "./results/final_model"  # 微调后的模型路径
-    quantized_model_path = "./results/final_model/onnx"  # 量化模型路径（与原始 ONNX 在同一目录）
+    model_name: str = "Helsinki-NLP/opus-mt-zh-en"  # 原始基础模型
+    finetuned_model_path: str = "./results/final_model"  # 微调后的模型路径
+    quantized_model_path: str = "./results/final_model/onnx"  # 量化模型路径（与原始 ONNX 在同一目录）
     
-    dataset_folder = "dataset"
-    source_file = "chinese_(simplified).ini"
+    dataset_folder: str = "dataset"
+    source_file: str = "chinese_(simplified).ini"
     
     # 生成配置
-    num_test_sentences = 20  # 生成测试句子数量
-    max_length = 128
+    num_test_sentences: int = 20  # 生成测试句子数量
+    max_length: int = 128
     
     # 对比配置
-    compare_models = True  # 是否进行模型对比
-    load_base_model = True  # 是否加载原始模型
-    load_quantized = True  # 是否加载量化模型
+    compare_models: bool = True  # 是否进行模型对比
+    load_base_model: bool = True  # 是否加载原始模型
+    load_quantized: bool = True  # 是否加载量化模型
+
+    # 测试数据配置
+    fixed_sentences: List[str] = field(default_factory=list)
+    templates: List[str] = field(default_factory=list)
+
+    @classmethod
+    def from_json(cls, json_path: str) -> "TestConfig":
+        """从 JSON 文件加载配置"""
+        if not os.path.exists(json_path):
+            return cls()
+            
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                config_dict = json.load(f)
+            
+            valid_keys = cls.__dataclass_fields__.keys()
+            filtered_dict = {k: v for k, v in config_dict.items() if k in valid_keys}
+            
+            print(f"Loaded config from {json_path}")
+            return cls(**filtered_dict)
+        except Exception as e:
+            print(f"Error loading config from {json_path}: {e}")
+            return cls()
 
 
 # ==================== 数据提取器 ====================
@@ -145,77 +172,15 @@ class GameDataExtractor:
 # ==================== 测试句子生成器 ====================
 class TestSentenceGenerator:
     """生成测试句子"""
-
-     # 固定测试语句（真实玩家对话）
-    FIXED_SENTENCES = [
-        "老登 什么时候让我上你的英仙座上当炮手",
-        "之前看别人说货运电梯要实装，以后不能自动装卸货了，那几千scu的货怎么装？手动？",
-        "而且我把维生排气都关掉了，门也都打开了，这火也不会灭",
-        "机库就一个红灯了，有无来开机库的，凑一套卡搞点组件",
-    ]
     
-    # 句子模板（游戏常见对话场景）
-    TEMPLATES = [
-        # 地点相关
-        "有人去{location}打赏金吗？",
-        "我在{location}，有人组队吗？",
-        "{location}现在安全吗？",
-        "从{location}到{location}需要多久？",
-        "我要去{location}做任务",
-        "{location}有好的装备商店吗？",
-        
-        # 载具相关
-        "我开着{vehicle}",
-        "{vehicle}这艘船怎么样？",
-        "想买一艘{vehicle}",
-        "{vehicle}能装多少货？",
-        "有人会开{vehicle}吗？",
-        "{vehicle}适合新手吗？",
-        "我的{vehicle}在{location}",
-        
-        # 组合场景
-        "有人去{location}打赏金吗？我开着{vehicle}",
-        "开{vehicle}去{location}做任务",
-        "在{location}买了{vehicle}",
-        "{vehicle}停在{location}了",
-        "我的{vehicle}被困在{location}了",
-        
-        # 物品相关
-        "哪里能买到{item}？",
-        "{item}多少钱？",
-        "我需要{item}",
-        "{location}有卖{item}吗？",
-        
-        # 战斗场景
-        "在{location}被袭击了",
-        "开着{vehicle}去{location}战斗",
-        "{location}有敌人",
-        
-        # 贸易场景
-        "在{location}卖货",
-        "用{vehicle}运货去{location}",
-        "{location}的价格怎么样？",
-        
-        # 求助场景
-        "我在{location}迷路了",
-        "有人在{location}附近吗？",
-        "{vehicle}坏了，在{location}",
-        "需要在{location}帮忙",
-        
-        # 闲聊场景
-        "{location}真漂亮",
-        "{vehicle}飞起来真爽",
-        "第一次来{location}",
-        "刚买的{vehicle}",
-    ]
-    
-    def __init__(self, extractor: GameDataExtractor):
+    def __init__(self, extractor: GameDataExtractor, config: TestConfig):
         self.extractor = extractor
+        self.config = config
     
     def generate_sentence(self, template: str = None) -> str:
         """生成一个测试句子"""
         if template is None:
-            template = random.choice(self.TEMPLATES)
+            template = random.choice(self.config.templates)
         
         # 找出模板中需要的类别
         placeholders = re.findall(r'\{(\w+)\}', template)
@@ -233,12 +198,12 @@ class TestSentenceGenerator:
         sentences = []
         
         # 首先添加所有固定句子
-        sentences.extend(self.FIXED_SENTENCES)
+        sentences.extend(self.config.fixed_sentences)
         
         # 然后生成随机句子
-        remaining = count - len(self.FIXED_SENTENCES)
+        remaining = count - len(self.config.fixed_sentences)
         if remaining > 0:
-            templates = self.TEMPLATES.copy()
+            templates = self.config.templates.copy()
             random.shuffle(templates)
             
             for i in range(remaining):
@@ -346,7 +311,7 @@ class MultiModelTester:
         # 加载原始基础模型
         if self.config.load_base_model:
             try:
-                model = PyTorchModelWrapper("原始模型 (Base)", self.config.base_model_name)
+                model = PyTorchModelWrapper("原始模型 (Base)", self.config.model_name)
                 self.models.append(model)
             except Exception as e:
                 print(f"⚠️  加载原始模型失败: {e}")
@@ -596,12 +561,31 @@ class InteractiveCLI:
 # ==================== 主函数 ====================
 def main():
     """主函数"""
-    # 检查命令行参数
-    cli_mode = '-cli' in sys.argv or '--cli' in sys.argv
+    parser = argparse.ArgumentParser(description="Opus-MT Test Script")
+    parser.add_argument("--config", type=str, default="config/zh-en.json", help="Path to configuration file")
+    parser.add_argument("--cli", action="store_true", help="Enable interactive CLI mode")
+    args = parser.parse_args()
     
-    config = TestConfig()
+    # 尝试加载配置
+    if os.path.exists(args.config):
+        config = TestConfig.from_json(args.config)
+        # 如果是 zh-en.json，可能没有 default values for new fields if they were omitted? 
+        # But dataclass has defaults.
+    else:
+        print(f"Config file not found: {args.config}, using defaults.")
+        config = TestConfig()
+        # 仅在 config 路径包含 json 时保存默认
+        if args.config.endswith(".json"):
+             try:
+                os.makedirs(os.path.dirname(args.config), exist_ok=True)
+                with open(args.config, 'w', encoding='utf-8') as f:
+                    # 使用 exclude? No need
+                    json.dump(asdict(config), f, indent=2, ensure_ascii=False)
+                print(f"Created default config at {args.config}")
+             except Exception as e:
+                print(f"Warning: Failed to save default config: {e}")
     
-    if cli_mode:
+    if args.cli:
         # CLI 交互模式
         cli = InteractiveCLI(config)
         cli.start()
@@ -616,9 +600,13 @@ def main():
     
     # 生成测试句子
     print(f"\n生成 {config.num_test_sentences} 个测试句子...")
-    generator = TestSentenceGenerator(extractor)
+    generator = TestSentenceGenerator(extractor, config)
     test_sentences = generator.generate_batch(config.num_test_sentences)
     
+    if not test_sentences:
+        print("\n⚠️ No test sentences configured or generated. Skipping test.")
+        return
+
     # 根据配置选择测试模式
     if config.compare_models:
         # 多模型对比模式
