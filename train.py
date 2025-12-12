@@ -34,6 +34,10 @@ class TrainingConfig:
     source_lang: str = "zh"  # 源语言代码
     target_lang: str = "en"  # 目标语言代码
     
+    # ScWeb 数据配置
+    scweb_folder: str = "dataset/ScWeb_Chinese_Translate"  # ScWeb 数据文件夹
+    scweb_mode: str = "off"  # off, k2v (key->value, en->zh), v2k (value->key, zh->en)
+    
     # 训练配置
     output_dir: str = "./results"
     max_length: int = 128
@@ -289,9 +293,83 @@ class IniDatasetLoader:
         
         return data
     
+    def load_scweb_data(self) -> List[Dict]:
+        """
+        加载 ScWeb_Chinese_Translate 数据
+        根据 scweb_mode 决定数据方向:
+        - k2v: key->value (英文->中文)
+        - v2k: value->key (中文->英文)
+        返回: 样本列表
+        """
+        if self.config.scweb_mode == "off":
+            return []
+        
+        scweb_folder = self.config.scweb_folder
+        if not os.path.exists(scweb_folder):
+            print(f"Warning: ScWeb folder not found: {scweb_folder}")
+            return []
+        
+        samples = []
+        filtered_count = 0
+        
+        # 遍历所有 JSON 文件
+        for filename in os.listdir(scweb_folder):
+            if not filename.endswith('.json'):
+                continue
+            
+            filepath = os.path.join(scweb_folder, filename)
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                for key, value in data.items():
+                    # 根据模式决定 source 和 target
+                    if self.config.scweb_mode == "k2v":
+                        # key->value: 英文->中文
+                        source_text = self.cleaner.clean_text(key)
+                        target_text = self.cleaner.clean_text(value)
+                    elif self.config.scweb_mode == "v2k":
+                        # value->key: 中文->英文
+                        source_text = self.cleaner.clean_text(value)
+                        target_text = self.cleaner.clean_text(key)
+                    else:
+                        continue
+                    
+                    # 验证文本对
+                    if not self.cleaner.is_valid_pair(
+                        source_text,
+                        target_text,
+                        self.config.min_text_length,
+                        self.config.max_text_length
+                    ):
+                        filtered_count += 1
+                        continue
+                    
+                    sample = {
+                        "key": f"scweb_{filename}_{key[:20]}",
+                        "source": source_text,
+                        "target": target_text,
+                        "source_length": len(source_text),
+                        "target_length": len(target_text),
+                        "type": "scweb",
+                        "category": "scweb"
+                    }
+                    samples.append(sample)
+                    
+            except Exception as e:
+                print(f"Warning: Error loading ScWeb file {filepath}: {e}")
+                continue
+        
+        print(f"\nScWeb Dataset Statistics:")
+        print(f"  Mode: {self.config.scweb_mode}")
+        print(f"  Valid samples: {len(samples)}")
+        print(f"  Filtered samples: {filtered_count}")
+        
+        return samples
+    
     def load_dataset(self) -> Tuple[List[Dict], List[Dict]]:
         """
-        加载数据集（包含原始数据 + 合成对话）
+        加载数据集（包含原始数据 + ScWeb 数据）
         返回: (priority_data, other_data)
         """
         source_path = os.path.join(self.config.dataset_folder, self.config.source_file)
@@ -349,9 +427,15 @@ class IniDatasetLoader:
         print(f"  Priority samples: {len(priority_samples)}")
         print(f"  Other samples: {len(other_samples)}")
         
+        # 加载 ScWeb 数据
+        scweb_samples = self.load_scweb_data()
+        if scweb_samples:
+            other_samples.extend(scweb_samples)
+        
         print(f"\nFinal Dataset Statistics:")
         print(f"  Total samples: {len(priority_samples) + len(other_samples)}")
-        print(f"  Priority samples (incl. synthetic): {len(priority_samples)}")
+        print(f"  Priority samples: {len(priority_samples)}")
+        print(f"  Other samples (incl. ScWeb): {len(other_samples)}")
         
         # 统计各类别数量
         if priority_samples:
