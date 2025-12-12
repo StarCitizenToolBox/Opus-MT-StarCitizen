@@ -8,8 +8,8 @@ import re
 import json
 import random
 import argparse
-from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Optional
+from dataclasses import dataclass
+from typing import Dict, List, Tuple
 import torch
 from torch.utils.data import Dataset
 from transformers import (
@@ -55,10 +55,6 @@ class TrainingConfig:
     # 优先级配置（是否启用分类训练）
     use_priority_training: bool = True
     priority_ratio: float = 0.7  # 优先类别占比
-
-    # 测试配置
-    fixed_sentences: List[str] = field(default_factory=list)
-    templates: List[str] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, json_path: str) -> "TrainingConfig":
@@ -621,33 +617,6 @@ class OpusMTTrainer:
         print(f"Final model saved to: {final_model_path}")
         
         return trainer
-    
-    def test_translation(self, texts: List[str], model_path: Optional[str] = None):
-        """测试翻译"""
-        if model_path:
-            model = MarianMTModel.from_pretrained(model_path)
-            tokenizer = MarianTokenizer.from_pretrained(model_path)
-        else:
-            model = self.model
-            tokenizer = self.tokenizer
-        
-        model.to(self.device)
-        model.eval()
-        
-        print("\n" + "="*50)
-        print("Translation Test")
-        print("="*50)
-        
-        for text in texts:
-            inputs = tokenizer(text, return_tensors="pt", padding=True)
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
-            
-            with torch.no_grad():
-                translated = model.generate(**inputs, max_length=self.config.max_length)
-            
-            translation = tokenizer.decode(translated[0], skip_special_tokens=True)
-            print(f"\nSource: {text}")
-            print(f"Translation: {translation}")
 
 
 # ==================== 主函数 ====================
@@ -655,6 +624,7 @@ def main():
     """主函数"""
     parser = argparse.ArgumentParser(description="Opus-MT Training Script")
     parser.add_argument("--config", type=str, default="config/zh-en.json", help="Path to configuration file")
+    parser.add_argument("--skip-test", action="store_true", help="Skip testing after training")
     args = parser.parse_args()
     
     # 创建配置
@@ -674,26 +644,38 @@ def main():
     # 开始训练
     trainer.train()
     
-    # 测试翻译
-    # 使用配置中的测试句子和模板
-    test_texts = []
-    if config.fixed_sentences:
-        test_texts.extend(config.fixed_sentences)
-    
-    if config.templates:
-        # 仅取前几个模板作为示例
-        test_texts.extend(config.templates[:5])
-    
-    # 如果配置中没有，则跳过测试
-    if not test_texts:
-        print("\nSkipping translation test (no test sentences configured).")
+    # 测试翻译 - 调用 test.py
+    if args.skip_test:
+        print("\nSkipping translation test (--skip-test flag set).")
         return
-
-    trainer.test_translation(
-        test_texts,
-        model_path=os.path.join(config.output_dir, "final_model")
-    )
+    
+    print("\n" + "=" * 50)
+    print("Running translation tests via test.py...")
+    print("=" * 50)
+    
+    import subprocess
+    import sys
+    
+    # 获取 test.py 的路径（与 train.py 在同一目录）
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    test_script = os.path.join(script_dir, "test.py")
+    
+    if os.path.exists(test_script):
+        try:
+            # 使用相同的配置文件调用 test.py
+            result = subprocess.run(
+                [sys.executable, test_script, "--config", args.config],
+                cwd=script_dir,
+                check=False
+            )
+            if result.returncode != 0:
+                print(f"\n⚠️ Test script exited with code {result.returncode}")
+        except Exception as e:
+            print(f"\n⚠️ Failed to run test script: {e}")
+    else:
+        print(f"\n⚠️ Test script not found: {test_script}")
 
 
 if __name__ == "__main__":
     main()
+

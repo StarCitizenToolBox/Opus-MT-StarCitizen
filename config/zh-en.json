@@ -7,6 +7,7 @@
     "target_lang": "en",
     "scweb_folder": "dataset/ScWeb_Chinese_Translate",
     "scweb_mode": "v2k",
+    "scweb_test_count": 100,
     "output_dir": "./results/zh-en",
     "finetuned_model_path": "./results/zh-en/final_model",
     "quantized_model_path": "./results/zh-en/final_model/onnx",

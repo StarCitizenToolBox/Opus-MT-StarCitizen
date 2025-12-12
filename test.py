@@ -44,6 +44,11 @@ class TestConfig:
     load_base_model: bool = True  # 是否加载原始模型
     load_quantized: bool = True  # 是否加载量化模型
 
+    # ScWeb 数据配置
+    scweb_folder: str = "dataset/ScWeb_Chinese_Translate"  # ScWeb 数据文件夹
+    scweb_mode: str = "off"  # off, k2v (key->value, en->zh), v2k (value->key, zh->en)
+    scweb_test_count: int = 100  # 从 ScWeb 数据中抽取的测试句子数量
+
     # 测试数据配置
     fixed_sentences: List[str] = field(default_factory=list)
     templates: List[str] = field(default_factory=list)
@@ -72,10 +77,29 @@ class TestConfig:
 class GameDataExtractor:
     """从 INI 文件提取游戏数据"""
     
-    # 分类正则表达式
+    # 分类正则表达式（与 train.py 中的 PRIORITY_CATEGORIES 保持同步）
     CATEGORIES = {
         "location": [
-            r"^(Stanton|Crusader|ArcCorp|Hurston|microTech|Orison|Area18|Lorville|NewBabbage)(?!.*_Desc).*",
+            r"^Bacchus(?!.*_Desc).*",
+            r"^Cano(?!.*_Desc).*",
+            r"^Castra(?!.*_Desc).*",
+            r"^Delamar(?!.*_Desc).*",
+            r"^Ellis(?!.*_Desc).*",
+            r"^Goss(?!.*_Desc).*",
+            r"^Hadrian(?!.*_Desc).*",
+            r"^Levski_Shop_Teach(?!.*_Desc).*",
+            r"^Magnus(?!.*_Desc).*",
+            r"^Nyx(?!.*_Desc).*",
+            r"^Oso(?!.*_Desc).*",
+            r"^Pyro(?!.*_Desc).*",
+            r"^Stanton(?!.*_Desc).*",
+            r"^Taranis(?!.*_Desc).*",
+            r"^Tarpits(?!.*_Desc).*",
+            r"^Tayac(?!.*_Desc).*",
+            r"^Terra(?!.*_Desc).*",
+            r"^Virgil(?!.*_Desc).*",
+            # 额外的地点匹配模式
+            r"^(Crusader|ArcCorp|Hurston|microTech|Orison|Area18|Lorville|NewBabbage)(?!.*_Desc).*",
             r"^(Port_Olisar|GrimHex|Everus|Baijini|Seraphim).*",
             r".*(?:Station|Port|Outpost|Settlement)(?!.*_Desc).*",
         ],
@@ -84,6 +108,30 @@ class GameDataExtractor:
         ],
         "item": [
             r"^item_Name.*",
+        ],
+        "thing": [  # 与 train.py 保持一致的别名
+            r"^item_Name.*",
+        ],
+        "subtitle": [
+            r"^DXSH_",
+            r"^Dlg_SC_.*",
+            r"^FW22_NT_Datapad_.*",
+            r"^FleetWeek2950_.*",
+            r"^GenResponse_.*",
+            r"^GenericLanding_.*",
+            r"^IT_Shared_.*",
+            r"^Imperilled_.*",
+            r"^MKTG_CUSTOMS1_CV_Access_.*",
+            r"^PH_PU_.*",
+            r"^PU_.*",
+            r"^Pacheco_.*",
+            r"^SC_ac_.*",
+            r"^SC_lz_.*",
+            r"^SM_SIMANN1_.*",
+            r"^contract_.*",
+            r"^covalex_.*",
+            r"^covalexrand_.*",
+            r"^covalexspec_.*",
         ],
         "mission": [
             r".*(bounty|Bounty|mission|Mission|contract|Contract).*",
@@ -167,6 +215,82 @@ class GameDataExtractor:
                 print(f"  {category}: {len(items)} 项")
                 print(f"    示例: {', '.join(items[:3])}")
         print("=" * 50)
+
+
+# ==================== ScWeb 数据加载器 ====================
+class ScWebDataLoader:
+    """加载 ScWeb_Chinese_Translate 数据用于测试"""
+    
+    def __init__(self, config: TestConfig):
+        self.config = config
+        self.data: List[Dict[str, str]] = []
+        
+        if config.scweb_mode != "off":
+            self._load_data()
+    
+    def _load_data(self):
+        """加载 ScWeb 数据"""
+        scweb_folder = self.config.scweb_folder
+        if not os.path.exists(scweb_folder):
+            print(f"Warning: ScWeb folder not found: {scweb_folder}")
+            return
+        
+        # 遍历所有 JSON 文件
+        for filename in os.listdir(scweb_folder):
+            if not filename.endswith('.json'):
+                continue
+            
+            filepath = os.path.join(scweb_folder, filename)
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    json_data = json.load(f)
+                
+                for key, value in json_data.items():
+                    # 过滤过长或过短的文本
+                    if len(key) < 2 or len(value) < 2:
+                        continue
+                    if len(key) > 100 or len(value) > 100:
+                        continue
+                    
+                    # 根据模式决定 source 和 target
+                    if self.config.scweb_mode == "k2v":
+                        # key->value: 英文->中文
+                        self.data.append({
+                            "source": key,
+                            "target": value,
+                            "file": filename
+                        })
+                    elif self.config.scweb_mode == "v2k":
+                        # value->key: 中文->英文
+                        self.data.append({
+                            "source": value,
+                            "target": key,
+                            "file": filename
+                        })
+                        
+            except Exception as e:
+                print(f"Warning: Error loading ScWeb file {filepath}: {e}")
+                continue
+        
+        print(f"\nScWeb 数据加载完成:")
+        print(f"  模式: {self.config.scweb_mode}")
+        print(f"  总条目: {len(self.data)}")
+    
+    def get_random_samples(self, count: int) -> List[Dict[str, str]]:
+        """随机获取测试样本"""
+        if not self.data:
+            return []
+        return random.sample(self.data, min(count, len(self.data)))
+    
+    def get_test_sentences(self, count: int) -> List[str]:
+        """获取测试句子（仅返回 source）"""
+        samples = self.get_random_samples(count)
+        return [s["source"] for s in samples]
+    
+    def get_test_pairs(self, count: int) -> List[Tuple[str, str]]:
+        """获取测试对（source, target）用于对比"""
+        samples = self.get_random_samples(count)
+        return [(s["source"], s["target"]) for s in samples]
 
 
 # ==================== 测试句子生成器 ====================
@@ -384,9 +508,18 @@ class MultiModelTester:
             f.write("=" * 100 + "\n\n")
             
             for i, result in enumerate(results, 1):
-                f.write(f"[{i}] 测试句子\n")
+                result_type = result.get('type', 'template')
+                if result_type == 'scweb':
+                    f.write(f"[{i}] ScWeb 测试句子\n")
+                else:
+                    f.write(f"[{i}] 测试句子\n")
                 f.write(f"{'-' * 100}\n")
-                f.write(f"中文: {result['source']}\n\n")
+                f.write(f"源文本: {result['source']}\n")
+                
+                # 如果有参考翻译，显示它
+                if 'reference' in result:
+                    f.write(f"参考翻译: {result['reference']}\n")
+                f.write("\n")
                 
                 for model_name, translation in result['translations'].items():
                     time_ms = result['times'].get(model_name, 0)
@@ -400,9 +533,10 @@ class MultiModelTester:
             f.write("\n平均推理时间:\n")
             f.write("-" * 100 + "\n")
             
-            for model in self.models:
-                avg_time = sum(r['times'].get(model.name, 0) for r in results) / len(results)
-                f.write(f"{model.name}: {avg_time:.2f} ms\n")
+            if results:
+                for model in self.models:
+                    avg_time = sum(r['times'].get(model.name, 0) for r in results) / len(results)
+                    f.write(f"{model.name}: {avg_time:.2f} ms\n")
         
         print(f"\n对比结果已保存到: {output_file}")
 
@@ -603,7 +737,14 @@ def main():
     generator = TestSentenceGenerator(extractor, config)
     test_sentences = generator.generate_batch(config.num_test_sentences)
     
-    if not test_sentences:
+    # 加载 ScWeb 数据（如果启用）
+    scweb_loader = ScWebDataLoader(config)
+    scweb_pairs = []
+    if config.scweb_mode != "off" and scweb_loader.data:
+        scweb_pairs = scweb_loader.get_test_pairs(config.scweb_test_count)
+        print(f"\n从 ScWeb 数据中抽取了 {len(scweb_pairs)} 个测试对")
+    
+    if not test_sentences and not scweb_pairs:
         print("\n⚠️ No test sentences configured or generated. Skipping test.")
         return
 
@@ -615,7 +756,52 @@ def main():
         print("=" * 80)
         
         tester = MultiModelTester(config)
-        results = tester.compare_translation(test_sentences, config.max_length)
+        
+        # 测试普通句子
+        results = []
+        if test_sentences:
+            print("\n" + "-" * 80)
+            print("模板生成句子测试")
+            print("-" * 80)
+            results = tester.compare_translation(test_sentences, config.max_length)
+        
+        # 测试 ScWeb 数据（带参考翻译对比）
+        if scweb_pairs:
+            print("\n" + "=" * 80)
+            print("ScWeb 数据对比测试（含参考翻译）")
+            print("=" * 80)
+            
+            for i, (source, reference) in enumerate(scweb_pairs, 1):
+                print(f"\n{'=' * 80}")
+                print(f"[ScWeb {i}/{len(scweb_pairs)}] 测试句子")
+                print(f"{'=' * 80}")
+                print(f"源文本: {source}")
+                print(f"参考翻译: {reference}")
+                print(f"{'-' * 80}")
+                
+                translations = {}
+                times = {}
+                
+                for model in tester.models:
+                    try:
+                        translation, time_ms = model.translate(source, config.max_length)
+                        translations[model.name] = translation
+                        times[model.name] = time_ms
+                        
+                        print(f"\n{model.name}:")
+                        print(f"  翻译: {translation}")
+                        print(f"  耗时: {time_ms:.2f} ms")
+                    except Exception as e:
+                        print(f"\n{model.name}: ❌ 翻译失败 - {e}")
+                
+                results.append({
+                    "source": source,
+                    "reference": reference,
+                    "translations": translations,
+                    "times": times,
+                    "type": "scweb"
+                })
+        
         tester.save_comparison_results(results)
     else:
         # 单模型测试模式（向后兼容）
@@ -624,7 +810,12 @@ def main():
         print("=" * 80)
         
         tester = TranslationTester(config.finetuned_model_path)
-        results = tester.translate_batch(test_sentences, config.max_length)
+        
+        all_sentences = test_sentences.copy()
+        if scweb_pairs:
+            all_sentences.extend([s for s, _ in scweb_pairs])
+        
+        results = tester.translate_batch(all_sentences, config.max_length)
         tester.save_results(results)
     
     print("\n✅ 测试完成！")
@@ -632,3 +823,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
